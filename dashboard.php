@@ -1,85 +1,31 @@
 <?php
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
 include 'config.php'; // Contains $pdo and session_start()
 
+require_once __DIR__ . '/vendor/autoload.php';
+
+$dotenv = Dotenv\Dotenv::createImmutable(__DIR__);
+$dotenv->load();
+
+$huggingface_api_key = $_ENV['HUGGINGFACE_API_KEY'];
+$model = $_ENV['HUGGINGFACE_MODEL'];
+
+$ai_message = ""; 
+
 if (!isset($_SESSION['user_id'])) {
-    die("Please login first.");
+    header("Location: login.php");
+    exit();
 }
+
 
 $userID = $_SESSION['user_id'];
 $currentMonth = date('Y-m');
 
 $alerts = [];
 
-// Step 1: Get user's latest income
-$stmt = $pdo->prepare("SELECT amount FROM income WHERE user_id = ? AND month = ? ORDER BY created_at DESC LIMIT 1");
-$stmt->execute([$userID, $currentMonth]);
-$userIncomeRow = $stmt->fetch(PDO::FETCH_ASSOC);
-$monthly_income = $userIncomeRow['amount'] ?? 0;
-
-// Step 2: If no income, ask user
-if (!$monthly_income) {
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['monthly_income'])) {
-        $monthly_income = floatval($_POST['monthly_income']);
-        if ($monthly_income > 0) {
-            $stmt = $pdo->prepare("INSERT INTO income (user_id, amount, month, created_at) VALUES (?, ?, ?, NOW())");
-            $stmt->execute([$userID, $monthly_income, $currentMonth]);
-            header("Location: " . $_SERVER['REQUEST_URI']);
-            exit;
-        } else {
-            echo "<div class='alert alert-danger'>Please enter a valid income amount.</div>";
-        }
-    }
-
-    // Income input form
-    echo '<form method="post">';
-    echo '<label>Your Monthly Income for ' . htmlspecialchars($currentMonth) . ' (₽):</label>';
-    echo '<input type="number" step="0.01" name="monthly_income" required class="form-control">';
-    echo '<button type="submit" class="btn btn-primary mt-2">Save Income</button>';
-    echo '</form>';
-    exit;
-}
-
-// Step 3: Generate spending summary
-$query = "
-    SELECT c.name AS category, SUM(e.total_amount) AS total
-    FROM expenses e
-    JOIN categories c ON e.category_id = c.id
-    WHERE e.user_id = ? AND c.user_id = ? AND e.purchase_date >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-    GROUP BY c.name
-";
-$stmt = $pdo->prepare($query);
-$stmt->execute([$userID, $userID]);
-
-$summary = "";
-while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-    $summary .= "{$row['category']}: ₽{$row['total']}\n";
-}
-
-// Step 4: Ask Hugging Face for budget advice
-$budget_prompt = "I earn ₽$monthly_income per month. Here is my 30-day spending:\n$summary\nGive me personal budget improvement advice.";
-
-// Hugging Face call
-$ch = curl_init("https://api-inference.huggingface.co/models/$model");
-curl_setopt_array($ch, [
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_HTTPHEADER => [
-        "Authorization: Bearer $huggingface_api_key",
-        "Content-Type: application/json"
-    ],
-    CURLOPT_POSTFIELDS => json_encode(["inputs" => $budget_prompt]),
-]);
-
-$response = curl_exec($ch);
-$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-curl_close($ch);
-
-if ($httpCode === 200) {
-    $data = json_decode($response, true);
-    $ai_message = $data[0]['generated_text'] ?? "No suggestion returned.";
-    echo "<div class='alert alert-info'><strong>AI Budget Tip:</strong><br>" . nl2br(htmlspecialchars($ai_message)) . "</div>";
-} else {
-    echo "<div class='alert alert-danger'>Hugging Face API Error: Failed to get response.</div>";
-}
 
 // Step 5: Savings goal form + processing
 
@@ -998,24 +944,117 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
   <!-- New Spending Summary tab content -->
   <div class="tab-pane fade <?php if ($activeTab == 'spendingSummary') echo 'show active'; ?>" id="spendingSummary" role="tabpanel" aria-labelledby="spendingSummary-tab">
-    <?php foreach ($alerts as $alert): ?>
+   <?php  
+// Step 1: Get user's latest income
+$stmt = $pdo->prepare("SELECT amount FROM income WHERE user_id = ? AND month = ? ORDER BY created_at DESC LIMIT 1");
+$stmt->execute([$userID, $currentMonth]);
+$userIncomeRow = $stmt->fetch(PDO::FETCH_ASSOC);
+$monthly_income = $userIncomeRow['amount'] ?? 0;
+
+// Step 2: If no income, ask user
+if (!$monthly_income) {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['monthly_income'])) {
+        $monthly_income = floatval($_POST['monthly_income']);
+        if ($monthly_income > 0) {
+            $stmt = $pdo->prepare("INSERT INTO income (user_id, amount, month, created_at) VALUES (?, ?, ?, NOW())");
+            $stmt->execute([$userID, $monthly_income, $currentMonth]);
+            header("Location: " . $_SERVER['REQUEST_URI']);
+            exit;
+        } else {
+            echo "<div class='alert alert-danger'>Please enter a valid income amount.</div>";
+        }
+    }
+
+    // Income input form
+    echo '<form method="post">';
+    echo '<label>Your Monthly Income for ' . htmlspecialchars($currentMonth) . ' (₽):</label>';
+    echo '<input type="number" step="0.01" name="monthly_income" required class="form-control">';
+    echo '<button type="submit" class="btn btn-primary mt-2">Save Income</button>';
+    echo '</form>';
+    exit;
+}
+
+// Step 3: Generate spending summary
+$query = "
+    SELECT c.name AS category, SUM(e.total_amount) AS total
+    FROM expenses e
+    JOIN categories c ON e.category_id = c.id
+    WHERE e.user_id = ? AND c.user_id = ? AND e.purchase_date >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+    GROUP BY c.name
+";
+$stmt = $pdo->prepare($query);
+$stmt->execute([$userID, $userID]);
+
+$summary = "";
+while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+    $summary .= "{$row['category']}: ₽{$row['total']}\n";
+}
+
+// Step 4: Ask Hugging Face for budget advice
+       $budget_prompt = <<<EOD
+            I earn ₽$monthly_income per month.
+
+            My 30-day spending summary is exactly:
+            $summary
+
+            Rules:
+            - Use ONLY the categories and amounts listed above.
+            - Do NOT invent or modify any categories or values.
+            - Identify which categories I could reduce, and by how much (in ₽ or %).
+            - Provide 3 to 5 practical and sustainable tips to reduce expenses.
+            - Ensure the total suggested savings does not exceed ₽$monthly_income.
+            - End your response after the plan. Do NOT ask questions or add extra context.
+
+            Structure your response as:
+            1. Category Adjustments
+            2. Practical Tips
+            3. Estimated Savings
+            EOD;
+
+
+// Hugging Face call
+$ch = curl_init("https://api-inference.huggingface.co/models/$model");
+curl_setopt_array($ch, [
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_HTTPHEADER => [
+        "Authorization: Bearer $huggingface_api_key",
+        "Content-Type: application/json"
+    ],
+    CURLOPT_POSTFIELDS => json_encode(["inputs" => $budget_prompt]),
+]);
+
+$response = curl_exec($ch);
+$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+curl_close($ch);
+
+if ($response === false) {
+    echo "<div class='alert alert-danger'>Curl error: " . curl_error($ch) . "</div>";
+} elseif ($httpCode !== 200) {
+    echo "<div class='alert alert-danger'>Hugging Face API returned HTTP $httpCode</div>";
+    echo "<pre>" . htmlspecialchars($response) . "</pre>";
+} else {
+    $data = json_decode($response, true);
+    if (isset($data[0]['generated_text'])) {
+        $ai_message = $data[0]['generated_text'];
+        echo "<div class='alert alert-info'><strong>AI Budget Tip:</strong><br>" . nl2br(htmlspecialchars($ai_message)) . "</div>";
+    } else {
+        echo "<div class='alert alert-warning'>Unexpected API response format.</div>";
+        echo "<pre>" . htmlspecialchars($response) . "</pre>"; // show raw response
+    }
+}
+?>
+  <?php foreach ($alerts as $alert): ?>
       <div class='alert alert-warning'><?= $alert ?></div>
     <?php endforeach; ?>
+ </div>
 
-    <?php if (!empty($ai_message)): ?>
-      <div class='alert alert-info'><strong>AI Budget Suggestion:</strong><br><?= nl2br(htmlspecialchars($ai_message)) ?></div>
-    <?php endif; ?>
-  </div>
-
-  <!-- New Saving Goal Assistant tab content -->
+  <!-- New Saving Goal tab content -->
 <div class="tab-pane fade <?php if ($activeTab == 'savingGoal') echo 'show active'; ?>" id="savingGoal" role="tabpanel" aria-labelledby="savingGoal-tab">
 
 <?php
-// Ensure income is available before allowing goal setting
 if (!$monthly_income) {
     echo '<div class="alert alert-warning">Please enter your monthly income in the Spending Summary tab before setting a savings goal.</div>';
 } else {
-    // Show goal input form
     echo '
     <form method="post" class="mb-4">
         <label>Set your financial goal:</label>
@@ -1024,11 +1063,10 @@ if (!$monthly_income) {
     </form>';
 }
 
-// Process submitted goal and show AI suggestion
 if (isset($_POST['ask_goal']) && !empty(trim($_POST['goal'])) && $monthly_income) {
     $user_goal = trim($_POST['goal']);
 
-    // Create summary of past 30 days (same as your Spending Summary tab)
+    // Spending summary query
     $query = "
         SELECT c.name AS category, SUM(e.total_amount) AS total
         FROM expenses e
@@ -1044,11 +1082,34 @@ if (isset($_POST['ask_goal']) && !empty(trim($_POST['goal'])) && $monthly_income
         $summary .= "{$row['category']}: ₽{$row['total']}\n";
     }
 
-    $prompt = "I earn ₽$monthly_income per month. Here is my recent 30-day spending:\n$summary\n" .
-              "My financial goal is: \"$user_goal\". Please give me a step-by-step plan or advice to achieve this goal.";
+$prompt = <<<EOD
+AI Budget Tip:
+I earn ₽$monthly_income per month.
 
-    // Call Hugging Face
-   $ch = curl_init("https://api-inference.huggingface.co/models/$model");
+My 30-day spending summary is exactly:
+$summary
+
+Rules:
+- Use ONLY the categories and amounts listed above.
+- Do NOT invent or modify any categories or values.
+- Identify which categories I could reduce, and by how much (in ₽ or %).
+- Provide 3 to 5 practical and sustainable tips to reduce expenses.
+- Ensure the total suggested savings does not exceed ₽$monthly_income minus the Goal.
+- End your response after the plan. Do NOT ask questions or add extra context.
+
+Structure your response as:
+1. Category Adjustments
+2. Practical Tips
+3. Estimated Savings
+
+Use a direct and personal tone (e.g., "You can cut..."). Avoid third-person references or names.
+EOD;
+
+
+
+
+    // Hugging Face API call using Zephyr
+    $ch = curl_init("https://api-inference.huggingface.co/models/$model");
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_HTTPHEADER => [
@@ -1062,16 +1123,26 @@ if (isset($_POST['ask_goal']) && !empty(trim($_POST['goal'])) && $monthly_income
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
 
-    if ($httpCode === 200) {
-        $data = json_decode($response, true);
-        $reply = $data[0]['generated_text'] ?? "No response.";
-        echo "<div class='alert alert-info'><strong>AI Budget Tip:</strong><br>" . nl2br(htmlspecialchars($reply)) . "</div>";
+    if ($response === false) {
+    echo "<div class='alert alert-danger'>Curl error: " . curl_error($ch) . "</div>";
+} elseif ($httpCode !== 200) {
+    echo "<div class='alert alert-danger'>Hugging Face API returned HTTP $httpCode</div>";
+    echo "<pre>" . htmlspecialchars($response) . "</pre>";
+} else {
+    $data = json_decode($response, true);
+    if (isset($data[0]['generated_text'])) {
+        $ai_message = $data[0]['generated_text'];
+        echo "<div class='alert alert-info'><strong>AI Saving Tip:</strong><br>" . nl2br(htmlspecialchars($ai_message)) . "</div>";
     } else {
-        echo "<div class='alert alert-danger'>Hugging Face API Error: HTTP $httpCode</div>";
+        echo "<div class='alert alert-warning'>Unexpected API response format.</div>";
+        echo "<pre>" . htmlspecialchars($response) . "</pre>"; // show raw response
     }
-        }
+}
+
+}
 ?>
 </div>
+
 
 
 
@@ -1358,8 +1429,8 @@ if (isset($_POST['ask_goal']) && !empty(trim($_POST['goal'])) && $monthly_income
             height: 95%;
         }
         .tab-pane {
-            overflow-y: 95%;
-            max-height: calc(100vh - 200px); /* or any reasonable size */
+            overflow-y: visible;
+            height: auto !important;
             padding-bottom: 20px;
         }
 

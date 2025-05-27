@@ -8,16 +8,14 @@ require_once __DIR__ . '/vendor/autoload.php'; // load Composer autoload
 $dotenv = Dotenv\Dotenv::createImmutable(__DIR__);
 $dotenv->load();
 
-// Now you can access your keys safely:
-$openaiKey = $_ENV['OPENAI_API_KEY'];
-$huggingfaceToken = $_ENV['HUGGINGFACE_TOKEN'];
+if (!defined('OPENAI_API_KEY')) {
+    define('OPENAI_API_KEY', getenv('OPENAI_API_KEY'));
+}
 
-
-
-$host = 'localhost';  
-$dbname = 'expense_db'; 
-$username = 'root';  // Change this if you have a different MySQL username
-$password = '';  // Change this if you have a MySQL password
+$host = getenv('DB_HOST') ?: 'localhost';
+$dbname = getenv('DB_NAME') ?: 'expense_db';
+$username = getenv('DB_USER') ?: 'root';
+$password = getenv('DB_PASS') ?: '';
 
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8", $username, $password);
